@@ -4,10 +4,9 @@
     // 3. Deploy → New deployment → Web app → Anyone → Copy the URL
     // 4. Paste the URL below and set USE_SHEETS = true
 
-    const USE_SHEETS = true; // ← true করুন যখন Web App URL দিবেন
+    const USE_SHEETS = true; // Google Sheets sync চালু
 
     const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIUlMjKwWT4Zuk3WT5P-SCWZu974DFBtMSKc4k7gBoOQsgKl0HUOzOLHGg36_DBuBb/exec';
-    // উদাহরণ: 'https://script.google.com/macros/s/AKfycbx...../exec'
 
     // ========== Constants & State ==========
     const STORAGE_KEY = 'daily_expense_tracker_v1';
