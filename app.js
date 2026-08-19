@@ -1,5 +1,23 @@
-// ========== Constants & State ==========
+// ========== Firebase Config (Cross-device sync) ==========
+    // 1. Go to https://console.firebase.google.com → Create project
+    // 2. Add a Web app → copy the firebaseConfig object below
+    // 3. Build → Firestore Database → Create database (start in test mode)
+    // 4. Paste your config here and set USE_FIREBASE = true
+
+    const USE_FIREBASE = false; // ← true করুন যখন config দিবেন
+
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // ========== Constants & State ==========
     const STORAGE_KEY = 'daily_expense_tracker_v1';
+    const FIRESTORE_COLLECTION = 'expenses';
     const CATEGORIES = ['Food','Transportation','Shopping','Bills','Entertainment','Education','Health','Travel','Other'];
 
     // Simple keyword → category mapping for auto-detect
@@ -18,6 +36,8 @@
     let currentStep = 1;
     let draft = { amount: 0, reason: '', category: '', date: '', notes: '' };
     let monthlyChart = null;
+    let db = null;
+    let unsubscribe = null;
 
     // ========== Helpers ==========
     function formatBDT(n) {
@@ -40,11 +60,24 @@
       return `${y}-${m}-${day}`;
     }
 
+    function nowTime() {
+      const d = new Date();
+      const h = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      return `${h}:${min}`;
+    }
+
     function formatDisplayDate(iso) {
       if (!iso) return '—';
       const [y, m, d] = iso.split('-');
       const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       return `${parseInt(d)} ${months[parseInt(m)-1]} ${y}`;
+    }
+
+    function formatDisplayDateTime(iso, time) {
+      const dateStr = formatDisplayDate(iso);
+      if (time) return `${dateStr} · ${time}`;
+      return dateStr;
     }
 
     function startOfWeek(d) {
@@ -90,20 +123,117 @@
       setTimeout(() => t.classList.remove('show'), 2800);
     }
 
-    // ========== Persistence ==========
-    function loadExpenses() {
+    // ========== Persistence (Local + Firebase) ==========
+    function sortExpenses() {
+      expenses.sort((a, b) => {
+        const d = (b.date || '').localeCompare(a.date || '');
+        if (d !== 0) return d;
+        return (b.time || '').localeCompare(a.time || '') || (b.id || 0) - (a.id || 0);
+      });
+    }
+
+    function loadExpensesLocal() {
       try {
         const raw = localStorage.getItem(STORAGE_KEY);
         expenses = raw ? JSON.parse(raw) : [];
-        // Ensure sorted newest first
-        expenses.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+        sortExpenses();
       } catch {
         expenses = [];
       }
     }
 
-    function saveExpenses() {
+    function saveExpensesLocal() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+    }
+
+    function initFirebase() {
+      if (!USE_FIREBASE || typeof firebase === 'undefined') {
+        console.log('Firebase off → using localStorage only');
+        return false;
+      }
+      try {
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+        // Real-time listener
+        unsubscribe = db.collection(FIRESTORE_COLLECTION)
+          .orderBy('date', 'desc')
+          .onSnapshot((snapshot) => {
+            expenses = snapshot.docs.map(doc => {
+              const data = doc.data();
+              return { ...data, id: data.id || doc.id, _docId: doc.id };
+            });
+            sortExpenses();
+            saveExpensesLocal(); // keep offline backup
+            updateSummary();
+            renderList();
+          }, (err) => {
+            console.error('Firestore error:', err);
+            showToast('Cloud sync error – using local data', 'error');
+          });
+        console.log('Firebase connected – cross-device sync ON');
+        return true;
+      } catch (e) {
+        console.error('Firebase init failed:', e);
+        showToast('Firebase setup error – using local only', 'error');
+        return false;
+      }
+    }
+
+    function loadExpenses() {
+      loadExpensesLocal();
+      if (USE_FIREBASE) {
+        // Firebase listener will overwrite with cloud data
+        initFirebase();
+      }
+    }
+
+    async function saveExpenses() {
+      saveExpensesLocal();
+      if (!USE_FIREBASE || !db) return;
+
+      // Sync each expense to Firestore (simple approach)
+      try {
+        const batch = db.batch();
+        const col = db.collection(FIRESTORE_COLLECTION);
+
+        // Get existing docs to avoid duplicates
+        const snap = await col.get();
+        const existingIds = new Set(snap.docs.map(d => d.data().id));
+
+        expenses.forEach(e => {
+          if (!existingIds.has(e.id)) {
+            const ref = col.doc(String(e.id));
+            batch.set(ref, {
+              id: e.id,
+              amount: e.amount,
+              reason: e.reason,
+              category: e.category,
+              date: e.date,
+              time: e.time || '',
+              notes: e.notes || '',
+              createdAt: e.createdAt || new Date().toISOString()
+            });
+          }
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error('Cloud save error:', err);
+        showToast('Saved locally (cloud sync failed)', 'error');
+      }
+    }
+
+    async function clearAllCloud() {
+      if (!USE_FIREBASE || !db) return;
+      try {
+        const snap = await db.collection(FIRESTORE_COLLECTION).get();
+        const batch = db.batch();
+        snap.docs.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      } catch (e) {
+        console.error('Cloud clear error:', e);
+      }
     }
 
     // ========== UI Updates ==========
@@ -269,7 +399,7 @@
           <div>
             <div class="reason">${escapeHtml(e.reason)}</div>
             <div class="meta">
-              <span>${formatDisplayDate(e.date)}</span>
+              <span>${formatDisplayDateTime(e.date, e.time)}</span>
               <span class="cat-pill">${escapeHtml(e.category || 'Other')}</span>
             </div>
           </div>
@@ -393,23 +523,32 @@
       draft.category = draft.category || document.getElementById('categorySelect').value || 'Other';
       draft.date = draft.date || document.getElementById('dateInput').value || todayISO();
 
+      // Auto time: if date is today → use current time, else 00:00
+      const isToday = draft.date === todayISO();
+      const time = isToday ? nowTime() : (draft.time || '00:00');
+
       const entry = {
         id: Date.now(),
         amount: draft.amount,
         reason: draft.reason,
         category: draft.category,
         date: draft.date,
+        time: time,
         notes: draft.notes,
         createdAt: new Date().toISOString()
       };
 
       expenses.unshift(entry); // newest first
-      // Keep sorted by date desc
-      expenses.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+      // Keep sorted by date desc, then time desc
+      expenses.sort((a, b) => {
+        const d = b.date.localeCompare(a.date);
+        if (d !== 0) return d;
+        return (b.time || '').localeCompare(a.time || '') || b.id - a.id;
+      });
       saveExpenses();
       updateSummary();
       renderList();
-      showToast(`Recorded: ${formatBDT(entry.amount)} — ${entry.reason}`);
+      showToast(`Recorded: ${formatBDT(entry.amount)} — ${entry.reason} (${entry.time})`);
       resetForm();
     });
 
@@ -419,9 +558,10 @@
         showToast('No expenses to export', 'error');
         return;
       }
-      const header = ['Date','Amount (BDT)','Expense Reason','Category','Notes'];
+      const header = ['Date','Time','Amount (BDT)','Expense Reason','Category','Notes'];
       const rows = expenses.map(e => [
         e.date,
+        e.time || '',
         e.amount,
         `"${(e.reason || '').replace(/"/g, '""')}"`,
         e.category,
@@ -445,11 +585,12 @@
         return;
       }
       let table = `<table border="1"><thead><tr>
-        <th>Date</th><th>Amount (BDT)</th><th>Expense Reason</th><th>Category</th><th>Notes</th>
+        <th>Date</th><th>Time</th><th>Amount (BDT)</th><th>Expense Reason</th><th>Category</th><th>Notes</th>
       </tr></thead><tbody>`;
       expenses.forEach(e => {
         table += `<tr>
           <td>${e.date}</td>
+          <td>${e.time || ''}</td>
           <td>${e.amount}</td>
           <td>${escapeHtml(e.reason)}</td>
           <td>${escapeHtml(e.category)}</td>
@@ -471,11 +612,12 @@
     });
 
     // Clear all
-    document.getElementById('btnClearAll').addEventListener('click', () => {
+    document.getElementById('btnClearAll').addEventListener('click', async () => {
       if (expenses.length === 0) return;
       if (confirm('Delete ALL expense records permanently? This cannot be undone.')) {
         expenses = [];
-        saveExpenses();
+        await clearAllCloud();
+        saveExpensesLocal();
         updateSummary();
         renderList();
         showToast('All records cleared');
@@ -486,4 +628,11 @@
     loadExpenses();
     updateSummary();
     renderList();
+
+    // Update badge
+    const badge = document.getElementById('syncBadge');
+    if (badge) {
+      badge.textContent = USE_FIREBASE ? 'BDT · Cloud Sync' : 'BDT · Local';
+    }
+
     document.getElementById('amountInput').focus();
