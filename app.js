@@ -1,24 +1,16 @@
-// ========== Firebase Config (Cross-device sync) ==========
-    // 1. Go to https://console.firebase.google.com → Create project
-    // 2. Add a Web app → copy the firebaseConfig object below
-    // 3. Build → Firestore Database → Create database (start in test mode)
-    // 4. Paste your config here and set USE_FIREBASE = true
+// ========== Google Sheets Config (Cross-device sync) ==========
+    // 1. Create a Google Sheet
+    // 2. Extensions → Apps Script → paste the script (google-apps-script.js)
+    // 3. Deploy → New deployment → Web app → Anyone → Copy the URL
+    // 4. Paste the URL below and set USE_SHEETS = true
 
-    const USE_FIREBASE = true; // Cloud sync চালু আছে
+    const USE_SHEETS = false; // ← true করুন যখন Web App URL দিবেন
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyB7SjlEgpggDh3l-UpV5NglFKxch6OvjqE",
-      authDomain: "daily-a5a2d.firebaseapp.com",
-      projectId: "daily-a5a2d",
-      storageBucket: "daily-a5a2d.firebasestorage.app",
-      messagingSenderId: "224613958164",
-      appId: "1:224613958164:web:679a2da21b4b9036219d01",
-      measurementId: "G-FBM5L0BLM9"
-    };
+    const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzIUlMjKwWT4Zuk3WT5P-SCWZu974DFBtMSKc4k7gBoOQsgKl0HUOzOLHGg36_DBuBb/exec';
+    // উদাহরণ: 'https://script.google.com/macros/s/AKfycbx...../exec'
 
     // ========== Constants & State ==========
     const STORAGE_KEY = 'daily_expense_tracker_v1';
-    const FIRESTORE_COLLECTION = 'expenses';
     const CATEGORIES = ['Food','Transportation','Shopping','Bills','Entertainment','Education','Health','Travel','Other'];
 
     // Simple keyword → category mapping for auto-detect
@@ -37,8 +29,6 @@
     let currentStep = 1;
     let draft = { amount: 0, reason: '', category: '', date: '', notes: '' };
     let monthlyChart = null;
-    let db = null;
-    let unsubscribe = null;
 
     // ========== Helpers ==========
     function formatBDT(n) {
@@ -124,7 +114,7 @@
       setTimeout(() => t.classList.remove('show'), 2800);
     }
 
-    // ========== Persistence (Local + Firebase) ==========
+    // ========== Persistence (Local + Google Sheets) ==========
     function sortExpenses() {
       expenses.sort((a, b) => {
         const d = (b.date || '').localeCompare(a.date || '');
@@ -147,93 +137,62 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
     }
 
-    function initFirebase() {
-      if (!USE_FIREBASE || typeof firebase === 'undefined') {
-        console.log('Firebase off → using localStorage only');
+    async function loadFromSheets() {
+      if (!USE_SHEETS || !GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes('YOUR_')) {
+        console.log('Google Sheets off → using localStorage only');
         return false;
       }
       try {
-        if (!firebase.apps.length) {
-          firebase.initializeApp(firebaseConfig);
+        const res = await fetch(GOOGLE_SCRIPT_URL + '?action=list');
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          expenses = data;
+          sortExpenses();
+          saveExpensesLocal();
+          updateSummary();
+          renderList();
+          console.log('Google Sheets loaded:', expenses.length, 'expenses');
+          return true;
         }
-        db = firebase.firestore();
-        // Real-time listener
-        unsubscribe = db.collection(FIRESTORE_COLLECTION)
-          .orderBy('date', 'desc')
-          .onSnapshot((snapshot) => {
-            expenses = snapshot.docs.map(doc => {
-              const data = doc.data();
-              return { ...data, id: data.id || doc.id, _docId: doc.id };
-            });
-            sortExpenses();
-            saveExpensesLocal(); // keep offline backup
-            updateSummary();
-            renderList();
-          }, (err) => {
-            console.error('Firestore error:', err);
-            showToast('Cloud sync error – using local data', 'error');
-          });
-        console.log('Firebase connected – cross-device sync ON');
-        return true;
+      } catch (err) {
+        console.error('Sheets load error:', err);
+        showToast('Cloud load failed – using local data', 'error');
+      }
+      return false;
+    }
+
+    async function addExpenseToSheets(entry) {
+      if (!USE_SHEETS || !GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes('YOUR_')) return;
+      try {
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          mode: 'no-cors', // Apps Script requires no-cors for simple POST
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(entry)
+        });
+        console.log('Sheets save sent:', entry.reason);
+        // Reload after short delay to confirm
+        setTimeout(() => loadFromSheets(), 1500);
+      } catch (err) {
+        console.error('Sheets save error:', err);
+        showToast('Saved locally (cloud sync failed)', 'error');
+      }
+    }
+
+    async function clearAllSheets() {
+      if (!USE_SHEETS || !GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes('YOUR_')) return;
+      try {
+        await fetch(GOOGLE_SCRIPT_URL + '?action=clear');
+        setTimeout(() => loadFromSheets(), 1000);
       } catch (e) {
-        console.error('Firebase init failed:', e);
-        showToast('Firebase setup error – using local only', 'error');
-        return false;
+        console.error('Sheets clear error:', e);
       }
     }
 
     function loadExpenses() {
       loadExpensesLocal();
-      if (USE_FIREBASE) {
-        // Firebase listener will overwrite with cloud data
-        initFirebase();
-      }
-    }
-
-    async function saveExpenses() {
-      saveExpensesLocal();
-      if (!USE_FIREBASE || !db) return;
-
-      // Sync each expense to Firestore (simple approach)
-      try {
-        const batch = db.batch();
-        const col = db.collection(FIRESTORE_COLLECTION);
-
-        // Get existing docs to avoid duplicates
-        const snap = await col.get();
-        const existingIds = new Set(snap.docs.map(d => d.data().id));
-
-        expenses.forEach(e => {
-          if (!existingIds.has(e.id)) {
-            const ref = col.doc(String(e.id));
-            batch.set(ref, {
-              id: e.id,
-              amount: e.amount,
-              reason: e.reason,
-              category: e.category,
-              date: e.date,
-              time: e.time || '',
-              notes: e.notes || '',
-              createdAt: e.createdAt || new Date().toISOString()
-            });
-          }
-        });
-        await batch.commit();
-      } catch (err) {
-        console.error('Cloud save error:', err);
-        showToast('Saved locally (cloud sync failed)', 'error');
-      }
-    }
-
-    async function clearAllCloud() {
-      if (!USE_FIREBASE || !db) return;
-      try {
-        const snap = await db.collection(FIRESTORE_COLLECTION).get();
-        const batch = db.batch();
-        snap.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-      } catch (e) {
-        console.error('Cloud clear error:', e);
+      if (USE_SHEETS) {
+        loadFromSheets();
       }
     }
 
@@ -540,13 +499,9 @@
       };
 
       expenses.unshift(entry); // newest first
-      // Keep sorted by date desc, then time desc
-      expenses.sort((a, b) => {
-        const d = b.date.localeCompare(a.date);
-        if (d !== 0) return d;
-        return (b.time || '').localeCompare(a.time || '') || b.id - a.id;
-      });
-      saveExpenses();
+      sortExpenses();
+      saveExpensesLocal();
+      addExpenseToSheets(entry); // ← Google Sheets-এ সেভ
       updateSummary();
       renderList();
       showToast(`Recorded: ${formatBDT(entry.amount)} — ${entry.reason} (${entry.time})`);
@@ -617,7 +572,7 @@
       if (expenses.length === 0) return;
       if (confirm('Delete ALL expense records permanently? This cannot be undone.')) {
         expenses = [];
-        await clearAllCloud();
+        await clearAllSheets();
         saveExpensesLocal();
         updateSummary();
         renderList();
@@ -633,7 +588,7 @@
     // Update badge
     const badge = document.getElementById('syncBadge');
     if (badge) {
-      badge.textContent = USE_FIREBASE ? 'BDT · Cloud Sync' : 'BDT · Local';
+      badge.textContent = USE_SHEETS ? 'BDT · Google Sheets' : 'BDT · Local';
     }
 
     document.getElementById('amountInput').focus();
