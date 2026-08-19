@@ -57,9 +57,43 @@
       return `${h}:${min}`;
     }
 
+    // Normalize any date format → YYYY-MM-DD
+    function normalizeDate(val) {
+      if (!val) return '';
+      // Already YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+
+      // Try parsing as Date
+      let d = null;
+      if (val instanceof Date) {
+        d = val;
+      } else {
+        const s = String(val).trim();
+        // DD/MM/YYYY or DD-MM-YYYY
+        const m1 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+        if (m1) {
+          d = new Date(Number(m1[3]), Number(m1[2]) - 1, Number(m1[1]));
+        } else {
+          // YYYY/MM/DD
+          const m2 = s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/);
+          if (m2) {
+            d = new Date(Number(m2[1]), Number(m2[2]) - 1, Number(m2[3]));
+          } else {
+            d = new Date(s);
+          }
+        }
+      }
+      if (!d || isNaN(d.getTime())) return String(val).slice(0, 10);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
     function formatDisplayDate(iso) {
-      if (!iso) return '—';
-      const [y, m, d] = iso.split('-');
+      const norm = normalizeDate(iso);
+      if (!norm || norm.length < 10) return '—';
+      const [y, m, d] = norm.split('-');
       const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
       return `${parseInt(d)} ${months[parseInt(m)-1]} ${y}`;
     }
@@ -78,11 +112,14 @@
     }
 
     function isSameDay(iso1, iso2) {
-      return iso1 === iso2;
+      return normalizeDate(iso1) === normalizeDate(iso2);
     }
 
     function isThisWeek(iso) {
-      const d = new Date(iso + 'T12:00:00');
+      const norm = normalizeDate(iso);
+      if (!norm) return false;
+      const d = new Date(norm + 'T12:00:00');
+      if (isNaN(d.getTime())) return false;
       const now = new Date();
       const start = startOfWeek(now);
       start.setHours(0,0,0,0);
@@ -93,7 +130,10 @@
     }
 
     function isThisMonth(iso) {
-      const d = new Date(iso + 'T12:00:00');
+      const norm = normalizeDate(iso);
+      if (!norm) return false;
+      const d = new Date(norm + 'T12:00:00');
+      if (isNaN(d.getTime())) return false;
       const now = new Date();
       return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
     }
@@ -145,7 +185,11 @@
         const res = await fetch(GOOGLE_SCRIPT_URL + '?action=list');
         const data = await res.json();
         if (Array.isArray(data)) {
-          expenses = data;
+          expenses = data.map(e => ({
+            ...e,
+            date: normalizeDate(e.date),
+            amount: Number(e.amount) || 0
+          }));
           sortExpenses();
           saveExpensesLocal();
           updateSummary();
@@ -257,8 +301,9 @@
       }
 
       expenses.forEach(e => {
-        if (!e.date || e.date.length < 7) return;
-        const key = e.date.slice(0, 7); // YYYY-MM
+        const norm = normalizeDate(e.date);
+        if (!norm || norm.length < 7) return;
+        const key = norm.slice(0, 7); // YYYY-MM
         if (totals.hasOwnProperty(key)) {
           totals[key] += Number(e.amount) || 0;
         }
