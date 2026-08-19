@@ -4,15 +4,16 @@
     // 3. Build → Firestore Database → Create database (start in test mode)
     // 4. Paste your config here and set USE_FIREBASE = true
 
-    const USE_FIREBASE = false; // ← true করুন যখন config দিবেন
+    const USE_FIREBASE = true; // Cloud sync চালু আছে
 
     const firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_PROJECT.firebaseapp.com",
-      projectId: "YOUR_PROJECT_ID",
-      storageBucket: "YOUR_PROJECT.appspot.com",
-      messagingSenderId: "YOUR_SENDER_ID",
-      appId: "YOUR_APP_ID"
+      apiKey: "AIzaSyB7SjlEgpggDh3l-UpV5NglFKxch6OvjqE",
+      authDomain: "daily-a5a2d.firebaseapp.com",
+      projectId: "daily-a5a2d",
+      storageBucket: "daily-a5a2d.firebasestorage.app",
+      messagingSenderId: "224613958164",
+      appId: "1:224613958164:web:679a2da21b4b9036219d01",
+      measurementId: "G-FBM5L0BLM9"
     };
 
     // ========== Constants & State ==========
