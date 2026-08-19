@@ -8,13 +8,16 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Firebase (for cross-device sync) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="container">
     <header>
       <h1><span class="emoji">💰</span> Daily Expense Tracker</h1>
-      <span class="badge">BDT · Local Storage</span>
+      <span class="badge" id="syncBadge">BDT · Local</span>
     </header>
 
     <!-- Summary Cards -->
@@ -101,7 +104,7 @@
             </select>
           </div>
           <div class="form-group">
-            <label for="dateInput">Date <span style="color:var(--text-muted);font-weight:400">(leave blank = today)</span></label>
+            <label for="dateInput">Date <span style="color:var(--text-muted);font-weight:400">(blank = today + current time auto)</span></label>
             <input type="date" id="dateInput" />
           </div>
           <div class="btn-row">
@@ -153,7 +156,7 @@
     </div>
 
     <footer>
-      Data is stored locally in your browser · Never overwrites previous records · Newest first
+      Date & Time auto · Daily total auto · Local storage · Newest first
     </footer>
   </div>
 
